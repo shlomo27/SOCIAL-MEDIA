@@ -218,24 +218,24 @@ async function init() {
   setLoad(10, 'BUILDING RENDERER...');
   setupRenderer();
   setLoad(25, 'GENERATING TRACK...');
-  await tick();
+  await tick(80);
   buildTrack();
   setLoad(45, 'SPAWNING CARS...');
-  await tick();
+  await tick(80);
   buildCars();
   setLoad(60, 'PLACING POWER-UPS...');
-  await tick();
+  await tick(80);
   spawnPowerups();
   setLoad(75, 'PAINTING STARS...');
-  await tick();
+  await tick(80);
   buildStarfield();
   buildLights();
   setLoad(90, 'TUNING ENGINE...');
-  await tick();
+  await tick(80);
   setupControls();
   setupAudio();
   setLoad(100, 'READY!');
-  await tick(300);
+  await tick(400);
   document.getElementById('loading').style.display = 'none';
   document.getElementById('menu').style.display = 'flex';
   gameState = 'menu';
@@ -273,11 +273,11 @@ function buildTrack() {
   // Generate wild roller-coaster control points
   const cp = generateControlPoints();
   const curve = new THREE.CatmullRomCurve3(cp, true, 'catmullrom', 0.5);
-  trackPoints = curve.getPoints(1200);
-  trackFrames = curve.computeFrenetFrames(1200, true);
+  trackPoints = curve.getPoints(300);
+  trackFrames = curve.computeFrenetFrames(300, true);
 
   // Build tube-style track with neon edges
-  const tubeGeo = new THREE.TubeGeometry(curve, 1200, 6, 12, true);
+  const tubeGeo = new THREE.TubeGeometry(curve, 300, 6, 8, true);
 
   // Track surface material
   const trackMat = new THREE.MeshStandardMaterial({
@@ -319,14 +319,13 @@ function generateControlPoints() {
 }
 
 function buildTrackGlow(curve) {
-  const pts = curve.getPoints(800);
-  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  const pts = curve.getPoints(300);
+  const frames = curve.computeFrenetFrames(300, true);
 
   // Two glow lines at track edges
   [-5, 5].forEach((offset, idx) => {
-    const frames = curve.computeFrenetFrames(800, true);
     const edgePts = pts.map((p, i) => {
-      return p.clone().addScaledVector(frames.binormal[i], offset);
+      return p.clone().addScaledVector(frames.binormals[i], offset);
     });
     const edgeGeo = new THREE.BufferGeometry().setFromPoints(edgePts);
     const color = idx === 0 ? 0xff00ff : 0x00ffff;
@@ -707,8 +706,7 @@ function getTrackPosition(t, lateralOffset) {
 }
 
 function getTrackFrame(t) {
-  const curve = track.userData.curve;
-  const idx = Math.floor((t % 1) * 1200);
+  const idx = Math.floor((t % 1) * 300);
   const i = Math.min(idx, trackFrames.tangents.length - 1);
   return {
     tangent: trackFrames.tangents[i],
