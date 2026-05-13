@@ -287,16 +287,29 @@ function buildTrackLights(){
 }
 
 // ── CAR PLACEMENT ────────────────────────────────────────────────────────────
+// Use lookAt toward a point BEHIND on the track — avoids manual matrix math
+// and handles degenerate (nearly-vertical) tangents gracefully.
+// Car mesh has front at +Z, so looking at the point behind makes +Z face forward.
 function placeOnTrack(car,t,lat){
-  const p   = curve.getPoint(((t%1)+1)%1);
-  const tan = curve.getTangent(((t%1)+1)%1).normalize();
-  const bi  = getRoadBi(t);
-  car.position.copy(p).addScaledVector(bi, lat*ROAD_W*.72).add(new THREE.Vector3(0,CAR_H,0));
-  const fwd   = tan.clone().negate();
-  const right = new THREE.Vector3().crossVectors(fwd,UP).normalize();
-  const up2   = new THREE.Vector3().crossVectors(right,fwd).normalize();
-  car.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right,up2,fwd));
-  car.rotateZ(lat*-0.11);
+  const norm = ((t%1)+1)%1;
+  const p    = curve.getPoint(norm);
+  const bi   = getRoadBi(t);
+
+  car.position.copy(p)
+    .addScaledVector(bi, lat*ROAD_W*.7)
+    .add(new THREE.Vector3(0, CAR_H, 0));
+
+  // Point slightly behind on track for lookAt target
+  const tBack = ((norm - 0.008 + 1) % 1);
+  const behind = curve.getPoint(tBack)
+    .addScaledVector(getRoadBi(tBack), lat*ROAD_W*.7)
+    .add(new THREE.Vector3(0, CAR_H, 0));
+
+  car.up.set(0,1,0);
+  car.lookAt(behind);
+
+  // Gentle lean into turns
+  car.rotateZ(lat * 0.10);
 }
 
 // ── CARS ─────────────────────────────────────────────────────────────────────
@@ -541,8 +554,8 @@ function updatePlayer(dt){
   if(keys['ArrowRight']||touchRight)steer+=1;
   if(gyroEnabled)steer+=tilt;
   steer=Math.max(-1,Math.min(1,steer));
-  d.lat+=steer*dt*2.8; d.lat*=(1-dt*.6); d.lat=Math.max(-1,Math.min(1,d.lat));
-  if(Math.abs(d.lat)>=.97){beginFall(playerCar);return;}
+  d.lat+=steer*dt*2.0; d.lat*=(1-dt*.7); d.lat=Math.max(-1.3,Math.min(1.3,d.lat));
+  if(Math.abs(d.lat)>=1.25){beginFall(playerCar);return;}
   placeOnTrack(playerCar,d.t,d.lat);
   spinWheels(playerCar,d.speed,dt);
   if(d.boost>0) emitBoost(playerCar);
@@ -564,8 +577,8 @@ function updateAI(car,dt){
   let steer=-d.lat*.88;
   const ah=((playerCar.userData.t-d.t+1)%1);
   if(ah<.04&&d.aggression>.4)steer+=(playerCar.userData.lat-d.lat)*d.aggression*1.6;
-  d.lat+=steer*dt*2; d.lat=Math.max(-.92,Math.min(.92,d.lat));
-  if(Math.abs(d.lat)>.9&&Math.random()<.04)beginFall(car);
+  d.lat+=steer*dt*1.8; d.lat=Math.max(-1.1,Math.min(1.1,d.lat));
+  if(Math.abs(d.lat)>1.05&&Math.random()<.04)beginFall(car);
   placeOnTrack(car,d.t,d.lat);
   spinWheels(car,d.speed,dt);
   powerups.forEach(pu=>{
