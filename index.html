@@ -357,7 +357,6 @@ function makeCar(bodyCol,accentCol){
   const wheels=[];
   wPos.forEach(([x,y,z])=>{
     const wg=new THREE.Group(); wg.position.set(x,y,z);
-    wg.add(Object.assign(new THREE.Mesh(GEO.tyre,MAT.tyre),{rotation:{z:Math.PI/2,x:0,y:0}}));
     const tyreM=new THREE.Mesh(GEO.tyre,MAT.tyre); tyreM.rotation.z=Math.PI/2; wg.add(tyreM);
     const rimM =new THREE.Mesh(GEO.rim, MAT.rim);  rimM.rotation.z=Math.PI/2;  wg.add(rimM);
     g.add(wg); wheels.push(wg);
