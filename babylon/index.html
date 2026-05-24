@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>WILD RIDE</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- Loading Screen -->
+  <div id="loadingScreen">
+    <div class="title-glow">WILD RIDE</div>
+    <div id="loadingBar"><div id="loadingFill"></div></div>
+    <div id="loadingText">INITIALIZING...</div>
+  </div>
+
+  <!-- Countdown -->
+  <div id="countdown" class="hidden"></div>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div id="hud-top">
+      <div id="position-display">
+        <span id="pos-num">1</span><span id="pos-suffix">ST</span>
+        <span id="pos-of"> / 4</span>
+      </div>
+      <div id="lap-display">
+        LAP <span id="lap-num">1</span> / 3
+      </div>
+      <div id="speed-display">
+        <span id="speed-num">0</span>
+        <span class="unit">KM/H</span>
+      </div>
+    </div>
+    <div id="powerup-display" class="hidden">
+      <div id="powerup-icon"></div>
+      <div id="powerup-name"></div>
+    </div>
+    <div id="minimap">
+      <canvas id="minimapCanvas" width="120" height="120"></canvas>
+    </div>
+  </div>
+
+  <!-- Touch Controls -->
+  <div id="touch-controls">
+    <div id="touch-left" class="touch-btn">◀</div>
+    <div id="touch-right" class="touch-btn">▶</div>
+    <div id="touch-use" class="touch-btn">USE</div>
+  </div>
+
+  <!-- End Screen -->
+  <div id="endScreen" class="hidden">
+    <div class="end-title">RACE OVER!</div>
+    <div id="end-position"></div>
+    <div id="end-time"></div>
+    <button id="restartBtn">RACE AGAIN</button>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
