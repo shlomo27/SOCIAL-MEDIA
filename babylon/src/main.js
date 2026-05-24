@@ -3,42 +3,35 @@ import {
   HemisphericLight, DirectionalLight,
   MeshBuilder, Mesh, StandardMaterial,
   PBRMaterial, GlowLayer,
-  FollowCamera, ArcRotateCamera,
+  UniversalCamera,
   Path3D, Curve3,
   TransformNode, Matrix, Quaternion,
-  VertexData, VertexBuffer,
-  Animation, AnimationGroup,
-  ParticleSystem, Texture, GPUParticleSystem,
 } from "@babylonjs/core";
-import "@babylonjs/core/Rendering/outlineRenderer";
 
-// ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════
 //  CONSTANTS
-// ═══════════════════════════════════════════════════
-const LAPS        = 3;
-const ROAD_W      = 18;
-const CAR_H       = 1.0;
-const SEGS        = 240;
-const NUM_AI      = 3;
-const BASE_SPEED  = 22;   // units/sec
-const MAX_SPEED   = 68;
-const ACCEL       = 3.5;
-const BRAKE       = 6.0;
-const STEER_RATE  = 1.8;
-const STEER_DAMP  = 0.72;
-const FALL_LAT    = 1.22;
-const FALL_T      = 2.4;
-const UP          = Vector3.Up();
+// ═══════════════════════════════════════
+const LAPS       = 3;
+const ROAD_W     = 18;
+const CAR_H      = 1.2;
+const NUM_AI     = 3;
+const BASE_SPEED = 22;
+const MAX_SPEED  = 68;
+const ACCEL      = 3.5;
+const BRAKE      = 6.0;
+const STEER_RATE = 1.8;
+const STEER_DAMP = 0.72;
+const FALL_LAT   = 1.25;
+const UP         = Vector3.Up();
 
 const POWERUP_TYPES = ["TURBO","ROCKET","SHIELD","MAGNET","BOMB","ICE","LIGHTNING"];
 const POWERUP_ICONS = { TURBO:"⚡",ROCKET:"🚀",SHIELD:"🛡️",MAGNET:"🧲",BOMB:"💣",ICE:"❄️",LIGHTNING:"⚡" };
-const POWERUP_COLS  = { TURBO:0xff8800,ROCKET:0xff2200,SHIELD:0x00aaff,MAGNET:0xff00ff,BOMB:0xff4400,ICE:0x88eeff,LIGHTNING:0xffff00 };
+const POWERUP_COLS  = { TURBO:"#ff8800",ROCKET:"#ff2200",SHIELD:"#00aaff",MAGNET:"#ff00ff",BOMB:"#ff4400",ICE:"#88eeff",LIGHTNING:"#ffff00" };
+const CAR_COLORS    = [0x00ccff, 0xff2244, 0x22ff88, 0xffaa00];
 
-const CAR_COLORS = [0x00ccff, 0xff2244, 0x22ff88, 0xffaa00];
-
-// ═══════════════════════════════════════════════════
-//  LOADING UI
-// ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════
+//  DOM
+// ═══════════════════════════════════════
 const loadingEl   = document.getElementById("loadingScreen");
 const loadingFill = document.getElementById("loadingFill");
 const loadingText = document.getElementById("loadingText");
@@ -50,99 +43,89 @@ function setProgress(pct, text) {
   loadingFill.style.width = pct + "%";
   if (text) loadingText.textContent = text;
 }
+function nextFrame() { return new Promise(r => requestAnimationFrame(r)); }
+function sleep(ms)   { return new Promise(r => setTimeout(r, ms)); }
 
-// ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════
 //  AUDIO
-// ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════
 let audioCtx;
 function getAudio() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   return audioCtx;
 }
-function playTone(freq, type, dur, vol = 0.3, detune = 0) {
+function playTone(freq, type, dur, vol = 0.3) {
   try {
     const ctx = getAudio();
     const o = ctx.createOscillator();
     const g = ctx.createGain();
     o.connect(g); g.connect(ctx.destination);
-    o.type = type; o.frequency.value = freq; o.detune.value = detune;
+    o.type = type; o.frequency.value = freq;
     g.gain.setValueAtTime(vol, ctx.currentTime);
     g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
     o.start(); o.stop(ctx.currentTime + dur);
   } catch {}
 }
-function playEngine(speed, maxSpeed) {
-  // called every frame — handled by oscillator update
-}
 
-// ═══════════════════════════════════════════════════
-//  TRACK GENERATION
-// ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════
+//  TRACK
+// ═══════════════════════════════════════
 function buildTrackPoints() {
   const pts = [];
-  const N = 28;
+  const N = 20;
   for (let i = 0; i < N; i++) {
     const a = (i / N) * Math.PI * 2;
-    const r = 160 + Math.sin(a * 3) * 55 + Math.cos(a * 5) * 30;
-    const x = Math.cos(a) * r;
-    const z = Math.sin(a) * r;
-    // height variation: big drops and rises
-    const y = Math.sin(a * 2) * 38 + Math.cos(a * 4) * 22 + Math.sin(a * 7 + 1) * 14;
-    pts.push(new Vector3(x, y, z));
+    const r = 160 + Math.sin(a * 3) * 50 + Math.cos(a * 5) * 25;
+    pts.push(new Vector3(
+      Math.cos(a) * r,
+      Math.sin(a * 2) * 32 + Math.cos(a * 4) * 18,
+      Math.sin(a) * r
+    ));
   }
-  pts.push(pts[0].clone());  // close
+  pts.push(pts[0].clone());
   return pts;
 }
 
-function computeTrack(scene) {
-  const pts = buildTrackPoints();
-  const cat = Curve3.CreateCatmullRomSpline(pts, SEGS, true);
-  const path3d = new Path3D(cat.getPoints());
-  const points = path3d.getCurve();
-  const tangents = path3d.getTangents();
+function computeTrack() {
+  const ctrlPts = buildTrackPoints();
+  // 10 subdivisions per control point = ~200 total points
+  const spline  = Curve3.CreateCatmullRomSpline(ctrlPts, 10, true);
+  const raw     = spline.getPoints();
 
-  // flat binormals (always horizontal cross-section)
-  const binormals = tangents.map(t => {
-    const bi = Vector3.Cross(t, UP);
-    return bi.length() < 0.001 ? new Vector3(1, 0, 0) : bi.normalize();
-  });
+  const tangents  = [];
+  const binormals = [];
 
-  return { points, tangents, binormals, path3d };
+  for (let i = 0; i < raw.length; i++) {
+    const prev = raw[(i - 1 + raw.length) % raw.length];
+    const next = raw[(i + 1) % raw.length];
+    const tan  = next.subtract(prev).normalize();
+    tangents.push(tan);
+
+    let bi = Vector3.Cross(tan, UP);
+    if (bi.length() < 0.001) bi = new Vector3(1, 0, 0);
+    binormals.push(bi.normalize());
+  }
+
+  return { points: raw, tangents, binormals };
 }
 
-function getTrackPoint(track, t) {
+function trackSample(track, t) {
   const pts = track.points;
-  const n   = pts.length - 1;
-  const fi  = ((t % 1 + 1) % 1) * n;
+  const n   = pts.length;
+  const fi  = ((t % 1 + 1) % 1) * (n - 1);
   const i0  = Math.floor(fi) % n;
   const i1  = (i0 + 1) % n;
   const f   = fi - Math.floor(fi);
-  return Vector3.Lerp(pts[i0], pts[i1], f);
+  return {
+    pos: Vector3.Lerp(pts[i0], pts[i1], f),
+    tan: Vector3.Lerp(track.tangents[i0],  track.tangents[i1],  f).normalize(),
+    bi:  Vector3.Lerp(track.binormals[i0], track.binormals[i1], f).normalize(),
+  };
 }
 
-function getTrackBi(track, t) {
-  const bis = track.binormals;
-  const n   = bis.length - 1;
-  const fi  = ((t % 1 + 1) % 1) * n;
-  const i0  = Math.floor(fi) % n;
-  const i1  = (i0 + 1) % n;
-  const f   = fi - Math.floor(fi);
-  return Vector3.Lerp(bis[i0], bis[i1], f).normalize();
-}
-
-function getTrackTan(track, t) {
-  const tans = track.tangents;
-  const n    = tans.length - 1;
-  const fi   = ((t % 1 + 1) % 1) * n;
-  const i0   = Math.floor(fi) % n;
-  const i1   = (i0 + 1) % n;
-  const f    = fi - Math.floor(fi);
-  return Vector3.Lerp(tans[i0], tans[i1], f).normalize();
-}
-
-// ═══════════════════════════════════════════════════
-//  ROAD MESH
-// ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════
+//  ROAD
+// ═══════════════════════════════════════
 function buildRoad(track, scene) {
   const pts = track.points;
   const bis = track.binormals;
@@ -151,10 +134,8 @@ function buildRoad(track, scene) {
   const leftPath  = [];
   const rightPath = [];
   for (let i = 0; i < n; i++) {
-    const p  = pts[i];
-    const bi = bis[i];
-    leftPath.push( p.add(bi.scale(-ROAD_W / 2)));
-    rightPath.push(p.add(bi.scale( ROAD_W / 2)));
+    leftPath.push( pts[i].add(bis[i].scale(-ROAD_W / 2)));
+    rightPath.push(pts[i].add(bis[i].scale( ROAD_W / 2)));
   }
 
   const road = MeshBuilder.CreateRibbon("road", {
@@ -164,958 +145,672 @@ function buildRoad(track, scene) {
   }, scene);
 
   const mat = new PBRMaterial("roadMat", scene);
-  mat.albedoColor      = new Color3(0.06, 0.06, 0.15);
-  mat.metallic         = 0.0;
-  mat.roughness        = 0.85;
-  mat.emissiveColor    = new Color3(0.02, 0.02, 0.06);
-  road.material = mat;
-  road.receiveShadows = false;
-
-  // Guard rails
-  buildRail(leftPath,  scene, new Color3(0, 1, 1));
-  buildRail(rightPath, scene, new Color3(1, 0, 1));
-
-  // Road markings (dashes)
-  buildMarkings(pts, scene);
-
-  return road;
-}
-
-function buildRail(path, scene, col) {
-  const rail = MeshBuilder.CreateTube("rail", {
-    path,
-    radius: 0.28,
-    tessellation: 5,
-    cap: Mesh.CAP_ALL,
-  }, scene);
-  const mat = new PBRMaterial("railMat" + Math.random(), scene);
-  mat.albedoColor   = Color3.Black();
-  mat.emissiveColor = col;
+  mat.albedoColor   = new Color3(0.06, 0.06, 0.16);
   mat.metallic      = 0;
-  mat.roughness     = 1;
-  rail.material = mat;
+  mat.roughness     = 0.9;
+  mat.emissiveColor = new Color3(0.02, 0.02, 0.06);
+  road.material     = mat;
+
+  // Rails as colored lines
+  buildRailLine(leftPath,  scene, new Color3(0, 1, 1));
+  buildRailLine(rightPath, scene, new Color3(1, 0, 1));
+
+  // Center dashes
+  const step = Math.max(1, Math.floor(n / 50));
+  const dashPts = [];
+  for (let i = 0; i < n; i += step) dashPts.push(pts[i]);
+  dashPts.push(pts[0]);
+  const dashes = MeshBuilder.CreateLines("dashes", { points: dashPts }, scene);
+  dashes.color = new Color3(1, 1, 0);
+  dashes.alpha = 0.35;
 }
 
-function buildMarkings(pts, scene) {
-  const step = Math.floor(pts.length / 60);
-  for (let i = 0; i < pts.length; i += step) {
-    const p0 = pts[i];
-    const p1 = pts[(i + step) % pts.length];
-    if (p0.subtract(p1).length() > 30) continue;
-    const line = MeshBuilder.CreateLines("mark", {
-      points: [p0, p1],
-    }, scene);
-    line.color = new Color3(1, 1, 0);
-    line.alpha = 0.4;
+function buildRailLine(path, scene, col) {
+  const closed = [...path, path[0]];
+  // Subsample to keep line count low
+  const step = Math.max(1, Math.floor(closed.length / 80));
+  const sub  = closed.filter((_, i) => i % step === 0);
+  sub.push(closed[0]);
+  const line = MeshBuilder.CreateLines("rail", { points: sub }, scene);
+  line.color = col;
+  line.alpha  = 0.9;
+
+  // Small glowing dots along rail
+  const dotMat = new PBRMaterial("dotMat_" + Math.random(), scene);
+  dotMat.albedoColor   = Color3.Black();
+  dotMat.emissiveColor = col;
+  dotMat.metallic      = 0;
+  dotMat.roughness     = 1;
+  const dotStep = Math.max(1, Math.floor(closed.length / 20));
+  for (let i = 0; i < closed.length; i += dotStep) {
+    const dot = MeshBuilder.CreateSphere("dot_" + i + Math.random(), { diameter: 0.55, segments: 4 }, scene);
+    dot.position.copyFrom(closed[i]);
+    dot.material = dotMat;
   }
 }
 
-// ═══════════════════════════════════════════════════
-//  CAR CREATION
-// ═══════════════════════════════════════════════════
-function buildCar(scene, colorHex, index) {
-  const root = new TransformNode("car" + index, scene);
+// ═══════════════════════════════════════
+//  CAR
+// ═══════════════════════════════════════
+function buildCar(scene, colorHex, idx) {
+  const root = new TransformNode("car" + idx, scene);
+  const col  = Color3.FromHexString("#" + colorHex.toString(16).padStart(6, "0"));
 
-  const col = Color3.FromHexString(
-    "#" + colorHex.toString(16).padStart(6, "0")
-  );
+  const bodyMat = new PBRMaterial("bodyMat" + idx, scene);
+  bodyMat.albedoColor    = col;
+  bodyMat.metallic       = 0.7;
+  bodyMat.roughness      = 0.2;
+  bodyMat.emissiveColor  = col.scale(0.12);
+  bodyMat.clearCoat.isEnabled  = true;
+  bodyMat.clearCoat.intensity  = 0.9;
+  bodyMat.clearCoat.roughness  = 0.1;
 
-  const bodyMat = new PBRMaterial("carBodyMat" + index, scene);
-  bodyMat.albedoColor = col;
-  bodyMat.metallic    = 0.7;
-  bodyMat.roughness   = 0.2;
-  bodyMat.clearCoat.isEnabled       = true;
-  bodyMat.clearCoat.intensity       = 0.9;
-  bodyMat.clearCoat.roughness       = 0.1;
-  bodyMat.emissiveColor = col.scale(0.15);
+  const body = MeshBuilder.CreateBox("body" + idx, { width: 2.8, height: 0.58, depth: 5.0 }, scene);
+  body.material = bodyMat; body.parent = root;
 
-  const body = MeshBuilder.CreateBox("body" + index, { width: 2.8, height: 0.6, depth: 5.0 }, scene);
-  body.material = bodyMat;
-  body.parent   = root;
+  const topMat = new PBRMaterial("topMat" + idx, scene);
+  topMat.albedoColor = col.scale(0.65);
+  topMat.metallic    = 0.5; topMat.roughness = 0.3;
+  topMat.clearCoat.isEnabled = true; topMat.clearCoat.intensity = 0.6;
+  const top = MeshBuilder.CreateBox("top" + idx, { width: 2.1, height: 0.62, depth: 2.1 }, scene);
+  top.position.y = 0.6; top.position.z = 0.3;
+  top.material = topMat; top.parent = root;
 
-  const topMat = new PBRMaterial("carTopMat" + index, scene);
-  topMat.albedoColor = col.scale(0.7);
-  topMat.metallic    = 0.5;
-  topMat.roughness   = 0.3;
-  topMat.clearCoat.isEnabled = true;
-  topMat.clearCoat.intensity = 0.7;
+  const wingMat = new PBRMaterial("wingMat" + idx, scene);
+  wingMat.albedoColor = new Color3(0.1, 0.1, 0.1);
+  wingMat.metallic = 0.9; wingMat.roughness = 0.15;
+  const wing = MeshBuilder.CreateBox("wing" + idx, { width: 3.1, height: 0.08, depth: 0.6 }, scene);
+  wing.position.y = 0.95; wing.position.z = -2.3;
+  wing.material = wingMat; wing.parent = root;
 
-  const top = MeshBuilder.CreateBox("top" + index, { width: 2.1, height: 0.62, depth: 2.1 }, scene);
-  top.position.y = 0.61;
-  top.position.z = 0.3;
-  top.material   = topMat;
-  top.parent     = root;
-
-  // Spoiler
-  const wingMat = new PBRMaterial("wingMat" + index, scene);
-  wingMat.albedoColor = Color3.FromHexString("#111111");
-  wingMat.metallic    = 0.9;
-  wingMat.roughness   = 0.15;
-
-  const wing = MeshBuilder.CreateBox("wing" + index, { width: 3.2, height: 0.08, depth: 0.6 }, scene);
-  wing.position.y = 0.95;
-  wing.position.z = -2.3;
-  wing.material   = wingMat;
-  wing.parent     = root;
-
-  // Headlights (emissive)
-  const lightMat = new PBRMaterial("lightMat" + index, scene);
-  lightMat.albedoColor  = Color3.White();
-  lightMat.emissiveColor = new Color3(1, 1, 0.8);
-  lightMat.metallic      = 0;
-  lightMat.roughness     = 1;
-
-  for (const side of [-1, 1]) {
-    const hl = MeshBuilder.CreateBox("hl" + index + side, { width: 0.5, height: 0.2, depth: 0.12 }, scene);
-    hl.position.set(side * 1.05, 0, 2.52);
-    hl.material = lightMat;
-    hl.parent   = root;
+  // Headlights
+  const hlMat = new PBRMaterial("hlMat" + idx, scene);
+  hlMat.emissiveColor = new Color3(1, 1, 0.85);
+  hlMat.albedoColor   = Color3.White();
+  hlMat.metallic = 0; hlMat.roughness = 1;
+  for (const s of [-1, 1]) {
+    const hl = MeshBuilder.CreateBox("hl" + idx + s, { width: 0.48, height: 0.2, depth: 0.1 }, scene);
+    hl.position.set(s * 1.0, 0.05, 2.55);
+    hl.material = hlMat; hl.parent = root;
   }
 
-  // Tail-lights (red emissive)
-  const tailMat = new PBRMaterial("tailMat" + index, scene);
-  tailMat.albedoColor   = Color3.Black();
-  tailMat.emissiveColor = new Color3(1, 0.04, 0.04);
-  tailMat.metallic      = 0;
-  tailMat.roughness     = 1;
-
-  for (const side of [-1, 1]) {
-    const tl = MeshBuilder.CreateBox("tl" + index + side, { width: 0.5, height: 0.18, depth: 0.12 }, scene);
-    tl.position.set(side * 1.05, 0, -2.52);
-    tl.material = tailMat;
-    tl.parent   = root;
+  // Taillights
+  const tlMat = new PBRMaterial("tlMat" + idx, scene);
+  tlMat.emissiveColor = new Color3(1, 0.04, 0.04);
+  tlMat.albedoColor   = Color3.Black();
+  tlMat.metallic = 0; tlMat.roughness = 1;
+  for (const s of [-1, 1]) {
+    const tl = MeshBuilder.CreateBox("tl" + idx + s, { width: 0.48, height: 0.18, depth: 0.1 }, scene);
+    tl.position.set(s * 1.0, 0.05, -2.55);
+    tl.material = tlMat; tl.parent = root;
   }
 
   // Wheels
-  const tyreMat = new PBRMaterial("tyreMat" + index, scene);
+  const tyreMat = new PBRMaterial("tyre" + idx, scene);
   tyreMat.albedoColor = new Color3(0.07, 0.07, 0.07);
-  tyreMat.metallic    = 0;
-  tyreMat.roughness   = 0.95;
+  tyreMat.metallic = 0; tyreMat.roughness = 0.95;
+  const rimMat = new PBRMaterial("rim" + idx, scene);
+  rimMat.albedoColor = new Color3(0.8, 0.8, 0.8);
+  rimMat.metallic = 0.95; rimMat.roughness = 0.1;
 
-  const rimMat = new PBRMaterial("rimMat" + index, scene);
-  rimMat.albedoColor = new Color3(0.85, 0.85, 0.85);
-  rimMat.metallic    = 0.95;
-  rimMat.roughness   = 0.1;
-
-  const wheelPos = [
-    [-1.55,  1.9], [-1.55, -1.9],
-    [ 1.55,  1.9], [ 1.55, -1.9],
-  ];
-  for (const [sx, sz] of wheelPos) {
-    const tyre = MeshBuilder.CreateCylinder("tyre" + index, { diameter: 1.1, height: 0.4, tessellation: 14 }, scene);
-    tyre.rotation.z = Math.PI / 2;
-    tyre.position.set(sx, -0.22, sz);
-    tyre.material = tyreMat;
-    tyre.parent   = root;
-
-    const rim = MeshBuilder.CreateCylinder("rim" + index, { diameter: 0.68, height: 0.42, tessellation: 8 }, scene);
-    rim.rotation.z = Math.PI / 2;
-    rim.position.set(sx, -0.22, sz);
-    rim.material = rimMat;
-    rim.parent   = root;
+  for (const [wx, wz] of [[-1.55, 1.9], [-1.55, -1.9], [1.55, 1.9], [1.55, -1.9]]) {
+    const t = MeshBuilder.CreateCylinder("t_" + idx + wx + wz, { diameter: 1.08, height: 0.38, tessellation: 12 }, scene);
+    t.rotation.z = Math.PI / 2; t.position.set(wx, -0.2, wz);
+    t.material = tyreMat; t.parent = root;
+    const r = MeshBuilder.CreateCylinder("r_" + idx + wx + wz, { diameter: 0.66, height: 0.4, tessellation: 8 }, scene);
+    r.rotation.z = Math.PI / 2; r.position.set(wx, -0.2, wz);
+    r.material = rimMat; r.parent = root;
   }
 
   return root;
 }
 
-// ═══════════════════════════════════════════════════
-//  POWERUP PICKUPS
-// ═══════════════════════════════════════════════════
-function buildPowerupMeshPool(scene) {
-  const pool = [];
-  for (let i = 0; i < 12; i++) {
-    const box = MeshBuilder.CreateBox("pu" + i, { size: 2.2 }, scene);
-    const mat = new PBRMaterial("puMat" + i, scene);
-    mat.albedoColor   = Color3.Black();
-    mat.emissiveColor = new Color3(1, 1, 0);
-    mat.metallic      = 0;
-    mat.roughness     = 1;
-    box.material      = mat;
-    box.isVisible     = false;
-    pool.push({ mesh: box, mat, active: false, t: 0, type: "" });
-  }
-  return pool;
+// ═══════════════════════════════════════
+//  PLACE CAR ON TRACK
+// ═══════════════════════════════════════
+function placeOnTrack(root, track, t, lat) {
+  const s   = trackSample(track, t);
+  const pos = s.pos.add(s.bi.scale(lat * ROAD_W * 0.62)).addInPlace(new Vector3(0, CAR_H, 0));
+  root.position.copyFrom(pos);
+
+  // Orientation: forward = track tangent, up = world up
+  const fwd   = s.tan.clone();
+  let   right = Vector3.Cross(UP, fwd);
+  if (right.length() < 0.01) right = new Vector3(1, 0, 0);
+  right.normalize();
+  const up2 = Vector3.Cross(fwd, right).normalize();
+
+  const m = Matrix.FromValues(
+    right.x, right.y, right.z, 0,
+    up2.x,   up2.y,   up2.z,   0,
+    fwd.x,   fwd.y,   fwd.z,   0,
+    0, 0, 0, 1
+  );
+  root.rotationQuaternion = Quaternion.FromRotationMatrix(m);
 }
 
-// ═══════════════════════════════════════════════════
-//  PARTICLES (POOL)
-// ═══════════════════════════════════════════════════
-const MAX_PAR = 150;
+// ═══════════════════════════════════════
+//  PARTICLES
+// ═══════════════════════════════════════
+const MAX_PAR = 120;
 
-function buildParticlePool(scene) {
+function buildParPool(scene) {
   const pool = [];
-  const geo  = { diameter: 0.4, tessellation: 3 };
-  const mat  = new StandardMaterial("parMat", scene);
-  mat.disableLighting = true;
-  mat.emissiveColor   = Color3.White();
+  const sharedMat = new StandardMaterial("parMat", scene);
+  sharedMat.disableLighting = true;
+  sharedMat.emissiveColor   = Color3.White();
 
   for (let i = 0; i < MAX_PAR; i++) {
-    const m = MeshBuilder.CreateSphere("par" + i, geo, scene);
-    m.material  = mat.clone();
+    const m = MeshBuilder.CreateSphere("p" + i, { diameter: 0.35, segments: 2 }, scene);
+    m.material  = sharedMat.clone();
     m.isVisible = false;
     m.isPickable = false;
-    pool.push({ mesh: m, active: false, vel: Vector3.Zero(), life: 0, maxLife: 1 });
+    pool.push({ mesh: m, active: false, vel: new Vector3(), life: 0, maxLife: 1 });
   }
   return pool;
 }
 
-function spawnParticles(pool, pos, count, vel, col, life = 0.6) {
+function spawnPar(pool, pos, count, vel, col, life = 0.6) {
   let spawned = 0;
   for (const p of pool) {
-    if (p.active) continue;
-    if (spawned >= count) break;
+    if (p.active || spawned >= count) continue;
     p.mesh.isVisible = true;
     p.mesh.position.copyFrom(pos);
     p.mesh.material.emissiveColor = col;
-    p.vel = new Vector3(
-      vel.x + (Math.random() - 0.5) * 6,
-      vel.y + Math.random() * 4,
-      vel.z + (Math.random() - 0.5) * 6
-    );
-    p.life    = life;
-    p.maxLife = life;
-    p.active  = true;
+    p.vel.set(vel.x + (Math.random()-0.5)*5, vel.y + Math.random()*3, vel.z + (Math.random()-0.5)*5);
+    p.life = p.maxLife = life;
+    p.active = true;
     spawned++;
   }
 }
 
-function updateParticles(pool, dt) {
+function tickPar(pool, dt) {
   for (const p of pool) {
     if (!p.active) continue;
     p.life -= dt;
-    if (p.life <= 0) {
-      p.active = false;
-      p.mesh.isVisible = false;
-      continue;
-    }
+    if (p.life <= 0) { p.active = false; p.mesh.isVisible = false; continue; }
     p.mesh.position.addInPlace(p.vel.scale(dt));
     p.vel.y -= 9.8 * dt;
-    const ratio = p.life / p.maxLife;
-    p.mesh.scaling.setAll(ratio * 0.9 + 0.1);
-    p.mesh.material.alpha = ratio;
+    const r = p.life / p.maxLife;
+    p.mesh.scaling.setAll(r * 0.8 + 0.1);
+    p.mesh.material.alpha = r;
   }
 }
 
-// ═══════════════════════════════════════════════════
-//  PLACE CAR ON TRACK
-// ═══════════════════════════════════════════════════
-function placeOnTrack(root, track, t, lat) {
-  const p   = getTrackPoint(track, t);
-  const bi  = getTrackBi(track, t);
-  const pos = p.add(bi.scale(lat * ROAD_W * 0.65)).add(new Vector3(0, CAR_H, 0));
-  root.position.copyFrom(pos);
-
-  // Orient car: face forward along track, world-upright
-  const tBack = ((t - 0.004 + 1) % 1);
-  const pBack = getTrackPoint(track, tBack).add(getTrackBi(track, tBack).scale(lat * ROAD_W * 0.65)).add(new Vector3(0, CAR_H, 0));
-
-  const fwd = pos.subtract(pBack).normalize();
-  const right = Vector3.Cross(UP, fwd).normalize();
-  const up2   = Vector3.Cross(fwd, right).normalize();
-
-  if (right.length() < 0.01) return;
-
-  const mat = Matrix.FromValues(
-    right.x, up2.x, fwd.x, 0,
-    right.y, up2.y, fwd.y, 0,
-    right.z, up2.z, fwd.z, 0,
-    0, 0, 0, 1
-  );
-  const quat = Quaternion.FromRotationMatrix(mat);
-  root.rotationQuaternion = quat;
-}
-
-// ═══════════════════════════════════════════════════
-//  POSITION SUFFIX
-// ═══════════════════════════════════════════════════
-function suffix(n) {
-  if (n === 1) return "ST";
-  if (n === 2) return "ND";
-  if (n === 3) return "RD";
-  return "TH";
-}
-
-// ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════
 //  MINIMAP
-// ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════
 const mmCanvas = document.getElementById("minimapCanvas");
 const mmCtx    = mmCanvas.getContext("2d");
-const MM_SIZE  = 120;
+const MM = 120;
+let mmPts = null;
 
-let mmTrackPts = null;
-
-function buildMinimapTrack(track) {
+function buildMinimap(track) {
   const pts = track.points;
-  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  let x0=Infinity, x1=-Infinity, z0=Infinity, z1=-Infinity;
   for (const p of pts) {
-    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
-    if (p.z < minZ) minZ = p.z; if (p.z > maxZ) maxZ = p.z;
+    if (p.x<x0) x0=p.x; if (p.x>x1) x1=p.x;
+    if (p.z<z0) z0=p.z; if (p.z>z1) z1=p.z;
   }
-  const sw = maxX - minX, sh = maxZ - minZ, sc = Math.max(sw, sh);
-  const pad = 10;
-  mmTrackPts = pts.map(p => ({
-    x: pad + ((p.x - minX) / sc) * (MM_SIZE - pad * 2),
-    y: pad + ((p.z - minZ) / sc) * (MM_SIZE - pad * 2),
+  const sc = Math.max(x1-x0, z1-z0), pd = 10;
+  mmPts = pts.map(p => ({
+    x: pd + ((p.x-x0)/sc)*(MM-pd*2),
+    y: pd + ((p.z-z0)/sc)*(MM-pd*2),
   }));
 }
 
+function mmSample(t) {
+  if (!mmPts) return { x: MM/2, y: MM/2 };
+  const n  = mmPts.length - 1;
+  const fi = ((t%1+1)%1) * n;
+  const i0 = Math.floor(fi)%n, i1=(i0+1)%n, f=fi-Math.floor(fi);
+  return { x: mmPts[i0].x*(1-f)+mmPts[i1].x*f, y: mmPts[i0].y*(1-f)+mmPts[i1].y*f };
+}
+
 function drawMinimap(cars) {
-  if (!mmTrackPts) return;
-  mmCtx.clearRect(0, 0, MM_SIZE, MM_SIZE);
-
-  // Track line
-  mmCtx.beginPath();
-  mmCtx.strokeStyle = "#0ff4";
-  mmCtx.lineWidth   = 2;
-  mmCtx.moveTo(mmTrackPts[0].x, mmTrackPts[0].y);
-  for (const p of mmTrackPts) mmCtx.lineTo(p.x, p.y);
-  mmCtx.closePath();
-  mmCtx.stroke();
-
-  const scale = (mm, t) => {
-    const pts = mmTrackPts;
-    const n   = pts.length - 1;
-    const fi  = ((t % 1 + 1) % 1) * n;
-    const i0  = Math.floor(fi) % n;
-    const i1  = (i0 + 1) % n;
-    const f   = fi - Math.floor(fi);
-    return {
-      x: pts[i0].x + (pts[i1].x - pts[i0].x) * f,
-      y: pts[i0].y + (pts[i1].y - pts[i0].y) * f,
-    };
-  };
-
-  const dotCols = ["#0ff", "#f44", "#2f8", "#fa0"];
-  for (let i = 0; i < cars.length; i++) {
-    const cd  = cars[i].userData;
-    const dot = scale(mmTrackPts, cd.t);
-    mmCtx.beginPath();
-    mmCtx.arc(dot.x, dot.y, i === 0 ? 5 : 3.5, 0, Math.PI * 2);
-    mmCtx.fillStyle = i === 0 ? "#fff" : dotCols[i];
-    mmCtx.fill();
+  if (!mmPts) return;
+  mmCtx.clearRect(0, 0, MM, MM);
+  mmCtx.beginPath(); mmCtx.strokeStyle="#0ff4"; mmCtx.lineWidth=2;
+  mmCtx.moveTo(mmPts[0].x, mmPts[0].y);
+  for (const p of mmPts) mmCtx.lineTo(p.x, p.y);
+  mmCtx.closePath(); mmCtx.stroke();
+  const cols = ["#fff","#f44","#2f8","#fa0"];
+  for (let i=0; i<cars.length; i++) {
+    const d = mmSample(cars[i].userData.t);
+    mmCtx.beginPath(); mmCtx.arc(d.x, d.y, i===0?5:3.5, 0, Math.PI*2);
+    mmCtx.fillStyle = cols[i]; mmCtx.fill();
   }
 }
 
-// ═══════════════════════════════════════════════════
-//  MAIN GAME
-// ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════
+//  SUFFIX
+// ═══════════════════════════════════════
+function suffix(n) { return n===1?"ST":n===2?"ND":n===3?"RD":"TH"; }
+
+// ═══════════════════════════════════════
+//  MAIN
+// ═══════════════════════════════════════
 async function main() {
-  setProgress(5, "STARTING ENGINE...");
-
-  const canvas = document.getElementById("gameCanvas");
-  const engine = new Engine(canvas, true, {
-    preserveDrawingBuffer: false,
-    stencil: false,
-    doNotHandleContextLost: false,
-    limitDeviceRatio: Math.min(window.devicePixelRatio, 2),
-  });
-
-  const scene = new Scene(engine);
-  scene.clearColor = new Color4(0.01, 0.01, 0.04, 1);
-  scene.fogMode    = Scene.FOGMODE_EXP2;
-  scene.fogDensity = 0.004;
-  scene.fogColor   = new Color3(0.01, 0.01, 0.08);
-
-  setProgress(15, "BUILDING WORLD...");
-  await nextFrame();
-
-  // ── Lights ──
-  const ambient = new HemisphericLight("amb", new Vector3(0, 1, 0), scene);
-  ambient.intensity    = 0.35;
-  ambient.diffuse      = new Color3(0.3, 0.3, 0.5);
-  ambient.groundColor  = new Color3(0.08, 0.08, 0.15);
-
-  const sun = new DirectionalLight("sun", new Vector3(-0.4, -1, -0.3), scene);
-  sun.intensity = 0.8;
-  sun.diffuse   = new Color3(0.9, 0.85, 1.0);
-
-  // ── Glow layer ──
-  const glow = new GlowLayer("glow", scene);
-  glow.intensity          = 1.4;
-  glow.blurKernelSize     = 32;
-  glow.isEnabled          = true;
-
-  // ── Skybox (gradient via background mesh) ──
-  const sky = MeshBuilder.CreateSphere("sky", { diameter: 1800, sideOrientation: Mesh.BACKSIDE }, scene);
-  const skyMat = new StandardMaterial("skyMat", scene);
-  skyMat.emissiveColor     = new Color3(0.01, 0.01, 0.06);
-  skyMat.disableLighting   = true;
-  skyMat.backFaceCulling   = false;
-  sky.material = skyMat;
-  sky.isPickable = false;
-
-  // Stars
-  const starPts = [];
-  for (let i = 0; i < 600; i++) {
-    const th = Math.random() * Math.PI * 2;
-    const ph = Math.acos(2 * Math.random() - 1);
-    starPts.push(new Vector3(Math.sin(ph) * Math.cos(th) * 800, Math.cos(ph) * 800, Math.sin(ph) * Math.sin(th) * 800));
-  }
-  const stars = MeshBuilder.CreatePointsCloud("stars", { points: starPts }, scene);
-  stars.material = (() => {
-    const m = new StandardMaterial("starMat", scene); m.emissiveColor = Color3.White(); m.disableLighting = true; return m;
-  })();
-
-  setProgress(30, "BUILDING TRACK...");
-  await nextFrame();
-
-  // ── Track ──
-  const track = computeTrack(scene);
-  buildRoad(track, scene);
-  buildMinimapTrack(track);
-
-  setProgress(50, "SPAWNING CARS...");
-  await nextFrame();
-
-  // ── Cars ──
-  const carMeshes = [];
-  const numCars = 1 + NUM_AI;
-  for (let i = 0; i < numCars; i++) {
-    const mesh = buildCar(scene, CAR_COLORS[i], i);
-    const data = {
-      t: -i * 0.015,         // stagger start positions
-      lat: (i % 2 === 0 ? -1 : 1) * 0.25,
-      speed: BASE_SPEED,
-      steer: 0,
-      lap: 0,
-      lapProgress: 0,
-      totalDist: 0,
-      falling: false,
-      fallTimer: 0,
-      ai: i > 0,
-      isPlayer: i === 0,
-      powerup: null,
-      powerupTimer: 0,
-      shield: false,
-      ice: false,
-      iceTimer: 0,
-      stunTimer: 0,
-      color: CAR_COLORS[i],
-    };
-    mesh.userData = data;
-    carMeshes.push(mesh);
-    placeOnTrack(mesh, track, data.t, data.lat);
-  }
-  const playerCar = carMeshes[0];
-
-  // ── Powerup pickups ──
-  const puPool = buildPowerupMeshPool(scene);
-  const pickups = [];
-  for (let i = 0; i < 10; i++) {
-    const t    = i / 10;
-    const type = POWERUP_TYPES[i % POWERUP_TYPES.length];
-    const pu   = puPool[i];
-    const hexCol = POWERUP_COLS[type];
-    pu.mat.emissiveColor = Color3.FromHexString("#" + hexCol.toString(16).padStart(6, "0"));
-    pu.t    = t;
-    pu.type = type;
-    pu.active = true;
-    pu.mesh.isVisible = true;
-    pu.respawn = 0;
-    pickups.push(pu);
-  }
-
-  function positionPickup(pu) {
-    const p  = getTrackPoint(track, pu.t);
-    const bi = getTrackBi(track, pu.t);
-    pu.mesh.position.copyFrom(p.add(new Vector3(0, CAR_H + 1.4, 0)));
-  }
-  for (const pu of pickups) positionPickup(pu);
-
-  // ── Particle pool ──
-  const parPool = buildParticlePool(scene);
-
-  // ── Camera ──
-  const camera = new ArcRotateCamera("cam", 0, 0, 10, Vector3.Zero(), scene);
-  camera.minZ = 0.5;
-  camera.maxZ = 2000;
-
-  // Manual camera target
-  let camPos  = playerCar.position.clone().add(new Vector3(0, 6, -14));
-  let camLook = playerCar.position.clone();
-
-  // ── Input ──
-  const keys = {};
-  window.addEventListener("keydown", e => { keys[e.code] = true; });
-  window.addEventListener("keyup",   e => { keys[e.code] = false; });
-
-  let touchLeft = false, touchRight = false, touchUse = false;
-  const tlBtn = document.getElementById("touch-left");
-  const trBtn = document.getElementById("touch-right");
-  const tuBtn = document.getElementById("touch-use");
-
-  for (const [el, setter] of [[tlBtn, v => touchLeft = v], [trBtn, v => touchRight = v], [tuBtn, v => touchUse = v]]) {
-    el.addEventListener("touchstart", e => { e.preventDefault(); setter(true); el.classList.add("pressed"); }, { passive: false });
-    el.addEventListener("touchend",   e => { e.preventDefault(); setter(false); el.classList.remove("pressed"); }, { passive: false });
-  }
-
-  // Gyroscope
-  let gyroY = 0;
-  window.addEventListener("deviceorientation", e => {
-    if (e.gamma !== null) gyroY = Math.max(-45, Math.min(45, e.gamma)) / 45;
-  });
-
-  setProgress(70, "LIGHTING NEONS...");
-  await nextFrame();
-
-  // ── Track lights ──
-  const trackLightColors = [
-    new Color3(0, 1, 1), new Color3(1, 0, 1),
-    new Color3(0, 0.5, 1), new Color3(1, 0.5, 0),
-  ];
-  for (let i = 0; i < 16; i++) {
-    const t    = i / 16;
-    const p    = getTrackPoint(track, t);
-    const post = MeshBuilder.CreateCylinder("post" + i, { height: 8, diameter: 0.25, tessellation: 6 }, scene);
-    post.position.copyFrom(p.add(new Vector3(0, 3, 0)));
-    const col = trackLightColors[i % trackLightColors.length];
-    const lm  = new PBRMaterial("lm" + i, scene);
-    lm.albedoColor   = Color3.Black();
-    lm.emissiveColor = col;
-    lm.metallic      = 0;
-    lm.roughness     = 1;
-    post.material = lm;
-  }
-
-  setProgress(90, "STARTING RACE...");
-  await nextFrame();
-
-  // ── HUD elements ──
-  const posNum    = document.getElementById("pos-num");
-  const posSuf    = document.getElementById("pos-suffix");
-  const lapNum    = document.getElementById("lap-num");
-  const speedNum  = document.getElementById("speed-num");
-  const puDisplay = document.getElementById("powerup-display");
-  const puIcon    = document.getElementById("powerup-icon");
-  const puName    = document.getElementById("powerup-name");
-
-  // ── Game state ──
-  let raceStarted   = false;
-  let raceFinished  = false;
-  let countdownVal  = 3;
-  let raceTime      = 0;
-  let playerFinPos  = 0;
-  let finishCount   = 0;
-  let usePowerup    = false;
-
-  // ── Countdown ──
-  setProgress(100, "GO!");
-  loadingEl.classList.add("fade-out");
-  setTimeout(() => loadingEl.style.display = "none", 700);
-
-  hudEl.classList.remove("hidden");
-  countdownEl.classList.remove("hidden");
-
-  async function runCountdown() {
-    for (let c = 3; c >= 1; c--) {
-      countdownEl.textContent = c;
-      countdownEl.style.animation = "none";
-      void countdownEl.offsetWidth; // force reflow
-      countdownEl.style.animation = "countPop 0.6s ease-out";
-      playTone(440, "square", 0.25, 0.3);
-      await sleep(900);
-    }
-    countdownEl.textContent = "GO!";
-    countdownEl.style.color = "#0f0";
-    countdownEl.style.textShadow = "0 0 40px #0f0, 0 0 80px #0f0";
-    countdownEl.style.animation = "none";
-    void countdownEl.offsetWidth;
-    countdownEl.style.animation = "countPop 0.6s ease-out";
-    playTone(880, "sawtooth", 0.4, 0.4);
-    raceStarted = true;
-    await sleep(700);
-    countdownEl.classList.add("hidden");
-  }
-  runCountdown();
-
-  // ── Engine oscillator for player ──
-  let engineOsc = null, engineGain = null;
   try {
-    const ctx   = getAudio();
-    engineOsc   = ctx.createOscillator();
-    engineGain  = ctx.createGain();
-    engineOsc.connect(engineGain);
-    engineGain.connect(ctx.destination);
-    engineOsc.type      = "sawtooth";
-    engineOsc.frequency.value = 80;
-    engineGain.gain.value     = 0.04;
-    engineOsc.start();
-  } catch {}
+    setProgress(5, "STARTING ENGINE...");
 
-  // ═══════════════════════════════════════════════
-  //  UPDATE LOOP
-  // ═══════════════════════════════════════════════
-  let lastT = performance.now();
-
-  scene.registerBeforeRender(() => {
-    const now = performance.now();
-    const dt  = Math.min((now - lastT) / 1000, 0.05);
-    lastT = now;
-
-    if (!raceStarted || raceFinished) return;
-    raceTime += dt;
-
-    // Rotate pickups
-    for (const pu of pickups) {
-      if (pu.active) {
-        pu.mesh.rotation.y += dt * 1.8;
-        pu.mesh.rotation.x += dt * 0.9;
-        // Bob
-        const p = getTrackPoint(track, pu.t);
-        pu.mesh.position.y = p.y + CAR_H + 1.4 + Math.sin(raceTime * 2.5 + pu.t * 50) * 0.4;
-      } else if (pu.respawn > 0) {
-        pu.respawn -= dt;
-        if (pu.respawn <= 0) {
-          pu.active = true;
-          pu.mesh.isVisible = true;
-          pu.type = POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)];
-          pu.mat.emissiveColor = Color3.FromHexString("#" + POWERUP_COLS[pu.type].toString(16).padStart(6, "0"));
-        }
-      }
-    }
-
-    // Update each car
-    for (let ci = 0; ci < carMeshes.length; ci++) {
-      const car = carMeshes[ci];
-      const d   = car.userData;
-
-      if (d.stunTimer > 0) {
-        d.stunTimer -= dt;
-        d.speed *= 0.9;
-        continue;
-      }
-
-      // ── Speed update ──
-      const topSpeed = d.powerup === "TURBO"  ? MAX_SPEED * 1.35
-                     : d.powerup === "ROCKET" ? MAX_SPEED * 1.6
-                     : MAX_SPEED;
-
-      if (d.ai) {
-        // AI always accelerates toward target speed
-        d.speed = Math.min(d.speed + ACCEL * dt * (0.85 + ci * 0.05), topSpeed * 0.92);
-      } else {
-        // Player
-        if (keys["ArrowUp"] || keys["KeyW"]) {
-          d.speed = Math.min(d.speed + ACCEL * dt, topSpeed);
-        } else if (keys["ArrowDown"] || keys["KeyS"]) {
-          d.speed = Math.max(d.speed - BRAKE * dt, 4);
-        } else {
-          d.speed = Math.max(d.speed - 1.5 * dt, BASE_SPEED);
-        }
-        d.speed = Math.min(d.speed, topSpeed);
-      }
-
-      // ── Steering ──
-      let steerInput = 0;
-      if (d.ai) {
-        // AI: steer to stay near center (±0.3 random bias)
-        const targetLat = d.aiTargetLat || 0;
-        steerInput = Math.max(-1, Math.min(1, (targetLat - d.lat) * 2.5));
-        // Occasionally change target lane
-        if (!d.aiNextLane || raceTime > d.aiNextLane) {
-          d.aiTargetLat = (Math.random() - 0.5) * 0.8;
-          d.aiNextLane  = raceTime + 1.5 + Math.random() * 2;
-        }
-      } else {
-        if (keys["ArrowLeft"]  || keys["KeyA"] || touchLeft)  steerInput -= 1;
-        if (keys["ArrowRight"] || keys["KeyD"] || touchRight) steerInput += 1;
-        if (Math.abs(gyroY) > 0.08) steerInput += gyroY * 1.2;
-        steerInput = Math.max(-1, Math.min(1, steerInput));
-
-        // Use powerup
-        if ((keys["Space"] || keys["KeyE"] || touchUse) && !usePowerup) {
-          usePowerup = true;
-          activatePowerup(d, carMeshes, parPool, track);
-        }
-        if (!keys["Space"] && !keys["KeyE"] && !touchUse) usePowerup = false;
-      }
-
-      if (d.ice) steerInput *= 0.35;
-
-      d.steer += (steerInput - d.steer) * (1 - Math.pow(STEER_DAMP, dt * 60));
-
-      // ── Move along track ──
-      const tAdv = (d.speed * dt) / (track.points.length * 2.2);
-      d.t += tAdv;
-      d.lat += d.steer * STEER_RATE * dt;
-      d.lat = Math.max(-1.3, Math.min(1.3, d.lat));
-      d.totalDist += d.speed * dt;
-
-      // Track t wrapping and lap counting
-      const prevLap = Math.floor(d.lap);
-      if (d.t > 1 && d.lapProgress > 0.5) {
-        d.lap++;
-        d.lapProgress = 0;
-        d.t -= 1;
-        if (!d.ai) {
-          lapNum.textContent = Math.min(d.lap + 1, LAPS);
-          playTone(660, "square", 0.3, 0.35);
-          spawnParticles(parPool, car.position, 20,
-            new Vector3(0, 3, 0), new Color3(0, 1, 1), 0.8);
-        }
-        if (d.lap >= LAPS) {
-          finishCount++;
-          if (d.isPlayer) {
-            playerFinPos  = finishCount;
-            raceFinished  = true;
-            showEndScreen(playerFinPos, raceTime);
-          }
-          d.speed = BASE_SPEED * 0.5;
-        }
-      }
-      if (d.t > 0.5) d.lapProgress = 1;
-
-      // ── Fall detection ──
-      if (Math.abs(d.lat) > FALL_LAT) {
-        d.fallTimer += dt;
-        if (d.fallTimer > 0.25) {
-          // Respawn
-          spawnParticles(parPool, car.position, 25,
-            new Vector3(0, 2, 0), new Color3(1, 0.3, 0), 0.9);
-          d.lat = 0;
-          d.t   = ((d.t % 1) + 1) % 1;
-          d.t   = Math.max(0, d.t - 0.02);
-          d.speed = BASE_SPEED * 0.7;
-          d.fallTimer = 0;
-          if (!d.ai) playTone(200, "sawtooth", 0.5, 0.3);
-        }
-      } else {
-        d.fallTimer = 0;
-      }
-
-      // ── Place on track ──
-      placeOnTrack(car, track, d.t, d.lat);
-
-      // ── Powerup timer ──
-      if (d.powerup && d.powerupTimer > 0) {
-        d.powerupTimer -= dt;
-        if (d.powerupTimer <= 0) {
-          d.powerup  = null;
-          d.shield   = false;
-          d.ice      = false;
-          if (!d.ai) updatePowerupHUD(null);
-        }
-      }
-      if (d.ice) {
-        d.iceTimer -= dt;
-        if (d.iceTimer <= 0) d.ice = false;
-      }
-
-      // ── Pickup collection ──
-      for (const pu of pickups) {
-        if (!pu.active) continue;
-        const puPos = getTrackPoint(track, pu.t).add(new Vector3(0, CAR_H + 1.4, 0));
-        const dist  = Vector3.Distance(car.position, puPos);
-        if (dist < 4.5) {
-          pu.active = false;
-          pu.mesh.isVisible = false;
-          pu.respawn = 8 + Math.random() * 5;
-          if (!d.ai) {
-            d.powerup      = pu.type;
-            d.powerupTimer = 12;
-            updatePowerupHUD(pu.type);
-            playTone(550, "square", 0.2, 0.3);
-          } else {
-            // AI immediately uses bomb/ice on player
-            if (pu.type === "BOMB" || pu.type === "ICE" || pu.type === "LIGHTNING") {
-              const pd = playerCar.userData;
-              const pDist = Vector3.Distance(car.position, playerCar.position);
-              if (pDist < 30) {
-                if (pu.type === "BOMB") { pd.stunTimer = 1.8; spawnParticles(parPool, playerCar.position, 30, new Vector3(0,5,0), new Color3(1,0.5,0), 1.0); playTone(180,"sawtooth",0.4,0.4); }
-                if (pu.type === "ICE")  { pd.ice = true; pd.iceTimer = 3; spawnParticles(parPool, playerCar.position, 20, new Vector3(0,2,0), new Color3(0.5,0.9,1), 0.7); }
-                if (pu.type === "LIGHTNING") { pd.stunTimer = 1.2; spawnParticles(parPool, playerCar.position, 15, new Vector3(0,3,0), new Color3(1,1,0), 0.5); }
-              }
-            }
-          }
-          break;
-        }
-      }
-    }
-
-    // ── AI ramming ──
-    for (let i = 1; i < carMeshes.length; i++) {
-      const ai  = carMeshes[i];
-      const pd  = playerCar.userData;
-      const dist = Vector3.Distance(ai.position, playerCar.position);
-      if (dist < 5.5 && !pd.shield) {
-        const pushDir = playerCar.position.subtract(ai.position).normalize();
-        pd.lat   += pushDir.x * 0.25;
-        pd.speed *= 0.88;
-        if (Math.random() < 0.1) playTone(220, "square", 0.15, 0.25);
-      }
-    }
-
-    // ── Race positions ──
-    const sorted = [...carMeshes].sort((a, b) => {
-      const ad = a.userData, bd = b.userData;
-      const at = ad.lap + ((ad.t % 1 + 1) % 1);
-      const bt = bd.lap + ((bd.t % 1 + 1) % 1);
-      return bt - at;
+    const canvas = document.getElementById("gameCanvas");
+    const engine = new Engine(canvas, true, {
+      preserveDrawingBuffer: false,
+      stencil: false,
+      limitDeviceRatio: Math.min(window.devicePixelRatio, 2),
     });
-    const pos = sorted.indexOf(playerCar) + 1;
-    posNum.textContent = pos;
-    posSuf.textContent = suffix(pos);
 
-    // ── Speed HUD ──
-    const kmh = Math.round(playerCar.userData.speed * 3.6 * 0.52);
-    speedNum.textContent = kmh;
+    const scene = new Scene(engine);
+    scene.clearColor = new Color4(0.01, 0.01, 0.04, 1);
+    scene.fogMode    = Scene.FOGMODE_EXP2;
+    scene.fogDensity = 0.003;
+    scene.fogColor   = new Color3(0.01, 0.01, 0.08);
 
-    // ── Engine sound ──
-    if (engineOsc) {
-      const freq = 60 + (playerCar.userData.speed / MAX_SPEED) * 220;
-      engineOsc.frequency.setTargetAtTime(freq, getAudio().currentTime, 0.1);
+    setProgress(12, "LIGHTING UP...");
+    await nextFrame();
+
+    const amb = new HemisphericLight("amb", new Vector3(0,1,0), scene);
+    amb.intensity   = 0.4;
+    amb.diffuse     = new Color3(0.3, 0.3, 0.6);
+    amb.groundColor = new Color3(0.05, 0.05, 0.12);
+
+    const sun = new DirectionalLight("sun", new Vector3(-0.4,-1,-0.3), scene);
+    sun.intensity = 0.7;
+
+    const glow = new GlowLayer("glow", scene);
+    glow.intensity      = 1.4;
+    glow.blurKernelSize = 32;
+
+    // Skybox
+    const sky = MeshBuilder.CreateSphere("sky", { diameter: 1600, sideOrientation: Mesh.BACKSIDE }, scene);
+    const skyMat = new StandardMaterial("skyMat", scene);
+    skyMat.emissiveColor   = new Color3(0.01, 0.01, 0.06);
+    skyMat.disableLighting = true;
+    skyMat.backFaceCulling = false;
+    sky.material  = skyMat;
+    sky.isPickable = false;
+
+    setProgress(25, "BUILDING TRACK...");
+    await nextFrame();
+
+    const track = computeTrack();
+    buildRoad(track, scene);
+    buildMinimap(track);
+
+    setProgress(50, "SPAWNING CARS...");
+    await nextFrame();
+
+    const carMeshes = [];
+    for (let i = 0; i < 1 + NUM_AI; i++) {
+      const mesh = buildCar(scene, CAR_COLORS[i], i);
+      mesh.userData = {
+        t: -i * 0.012, lat: (i%2===0?-1:1)*0.22, speed: BASE_SPEED,
+        steer: 0, lap: 0, lapProgress: 0, totalDist: 0,
+        falling: false, fallTimer: 0,
+        ai: i > 0, isPlayer: i === 0,
+        powerup: null, powerupTimer: 0,
+        shield: false, ice: false, iceTimer: 0,
+        stunTimer: 0, color: CAR_COLORS[i],
+        aiTargetLat: 0, aiNextLane: 0,
+      };
+      placeOnTrack(mesh, track, mesh.userData.t, mesh.userData.lat);
+      carMeshes.push(mesh);
+    }
+    const player = carMeshes[0];
+
+    setProgress(65, "PLACING PICKUPS...");
+    await nextFrame();
+
+    // Pickups
+    const pickups = [];
+    {
+      const dotMats = {};
+      for (let i = 0; i < 10; i++) {
+        const type    = POWERUP_TYPES[i % POWERUP_TYPES.length];
+        const col     = Color3.FromHexString(POWERUP_COLS[type]);
+        const box     = MeshBuilder.CreateBox("pu_"+i, { size: 2.0 }, scene);
+        const mat     = new PBRMaterial("puMat_"+i, scene);
+        mat.albedoColor   = Color3.Black();
+        mat.emissiveColor = col;
+        mat.metallic = 0; mat.roughness = 1;
+        box.material  = mat;
+        const t = i / 10;
+        const s = trackSample(track, t);
+        box.position.copyFrom(s.pos.add(new Vector3(0, CAR_H+1.5, 0)));
+        pickups.push({ mesh: box, mat, t, type, active: true, respawn: 0 });
+      }
     }
 
-    // ── Camera ──
-    updateCamera(camera, playerCar, track, dt, camPos, camLook);
+    setProgress(80, "BUILDING PARTICLES...");
+    await nextFrame();
 
-    // ── Particles ──
-    updateParticles(parPool, dt);
+    const parPool = buildParPool(scene);
 
-    // ── Exhaust particles ──
-    if (Math.random() < 0.35) {
-      const ex = playerCar.position.add(new Vector3(0, -0.2, -2.6));
-      const spd = playerCar.userData.speed;
-      const col = spd > BASE_SPEED * 1.5 ? new Color3(0, 0.8, 1) : new Color3(0.6, 0.6, 0.6);
-      spawnParticles(parPool, ex, 1, new Vector3((Math.random()-0.5)*2, 1, -spd*0.04), col, 0.3);
+    setProgress(90, "SETTING UP CAMERA...");
+    await nextFrame();
+
+    const camera = new UniversalCamera("cam", new Vector3(0, 10, -20), scene);
+    camera.minZ = 0.5;
+    camera.maxZ = 2000;
+    camera.setTarget(Vector3.Zero());
+
+    const camPos  = player.position.clone().add(new Vector3(0, 6, -14));
+    const camLook = player.position.clone();
+
+    // Input
+    const keys = {};
+    window.addEventListener("keydown", e => { keys[e.code] = true; });
+    window.addEventListener("keyup",   e => { keys[e.code] = false; });
+
+    let touchLeft=false, touchRight=false, touchUse=false;
+    const tlBtn=document.getElementById("touch-left");
+    const trBtn=document.getElementById("touch-right");
+    const tuBtn=document.getElementById("touch-use");
+    const addTouch = (el, set) => {
+      el.addEventListener("touchstart", e => { e.preventDefault(); set(true);  el.classList.add("pressed");    }, { passive:false });
+      el.addEventListener("touchend",   e => { e.preventDefault(); set(false); el.classList.remove("pressed"); }, { passive:false });
+    };
+    addTouch(tlBtn, v => touchLeft  = v);
+    addTouch(trBtn, v => touchRight = v);
+    addTouch(tuBtn, v => touchUse   = v);
+
+    let gyroY = 0;
+    window.addEventListener("deviceorientation", e => {
+      if (e.gamma !== null) gyroY = Math.max(-45, Math.min(45, e.gamma)) / 45;
+    });
+
+    // HUD refs
+    const posNum   = document.getElementById("pos-num");
+    const posSuf   = document.getElementById("pos-suffix");
+    const lapNum   = document.getElementById("lap-num");
+    const speedNum = document.getElementById("speed-num");
+    const puDisp   = document.getElementById("powerup-display");
+    const puIcon   = document.getElementById("powerup-icon");
+    const puName   = document.getElementById("powerup-name");
+
+    function updatePuHUD(type) {
+      if (!type) { puDisp.classList.add("hidden"); return; }
+      puDisp.classList.remove("hidden");
+      puIcon.textContent = POWERUP_ICONS[type] || "?";
+      puName.textContent = type;
     }
 
-    // ── Minimap ──
-    drawMinimap(carMeshes);
-  });
+    // Engine oscillator
+    let engOsc = null, engGain = null;
+    try {
+      const ctx = getAudio();
+      engOsc  = ctx.createOscillator();
+      engGain = ctx.createGain();
+      engOsc.connect(engGain); engGain.connect(ctx.destination);
+      engOsc.type = "sawtooth"; engOsc.frequency.value = 80;
+      engGain.gain.value = 0.04;
+      engOsc.start();
+    } catch {}
 
-  // ═══════════════════════════════════════════════
-  //  CAMERA
-  // ═══════════════════════════════════════════════
-  const _camPos  = new Vector3();
-  const _camLook = new Vector3();
+    // Game state
+    let raceStarted  = false;
+    let raceFinished = false;
+    let raceTime     = 0;
+    let finishCount  = 0;
+    let usePuFlag    = false;
 
-  function updateCamera(cam, target, track, dt, cp, cl) {
-    const d   = target.userData;
-    const tan = getTrackTan(track, ((d.t % 1 + 1) % 1));
-    const flatTan = new Vector3(tan.x, tan.y * 0.2, tan.z).normalize();
+    // Show UI
+    setProgress(100, "GO!");
+    loadingEl.classList.add("fade-out");
+    setTimeout(() => { loadingEl.style.display = "none"; }, 700);
+    hudEl.classList.remove("hidden");
+    countdownEl.classList.remove("hidden");
 
-    const back  = d.powerup === "ROCKET" ? 20 : 14;
-    const rise  = 6;
-    const ahead = 12;
-
-    const idealPos  = target.position.subtract(flatTan.scale(back)).add(new Vector3(0, rise, 0));
-    const idealLook = target.position.add(flatTan.scale(ahead));
-
-    const alpha = Math.min(dt * 9, 1);
-    Vector3.LerpToRef(cp, idealPos,  alpha, _camPos);
-    Vector3.LerpToRef(cl, idealLook, Math.min(dt * 11, 1), _camLook);
-    cp.copyFrom(_camPos);
-    cl.copyFrom(_camLook);
-
-    cam.position.copyFrom(_camPos);
-    cam.setTarget(_camLook);
-    cam.upVector.copyFromFloats(0, 1, 0);
-  }
-
-  // ═══════════════════════════════════════════════
-  //  POWERUP ACTIVATION
-  // ═══════════════════════════════════════════════
-  function activatePowerup(d, cars, parPool, track) {
-    if (!d.powerup || d.ai) return;
-    const type = d.powerup;
-    playTone(770, "square", 0.3, 0.4);
-
-    if (type === "TURBO") {
-      d.speed = Math.min(d.speed + 28, MAX_SPEED * 1.35);
-      spawnParticles(parPool, playerCar.position, 20, new Vector3(0, 2, 0), new Color3(0, 1, 1), 0.6);
-
-    } else if (type === "ROCKET") {
-      d.speed = MAX_SPEED * 1.6;
-      d.powerupTimer = 4;
-      spawnParticles(parPool, playerCar.position, 30, new Vector3(0, 3, 0), new Color3(1, 0.4, 0), 0.8);
-
-    } else if (type === "SHIELD") {
-      d.shield = true;
-      d.powerupTimer = 8;
-      spawnParticles(parPool, playerCar.position, 15, new Vector3(0, 2, 0), new Color3(0, 0.6, 1), 0.6);
-
-    } else if (type === "MAGNET") {
-      // Pull forward
-      d.t += 0.025;
-      d.speed = Math.min(d.speed + 18, MAX_SPEED);
-      spawnParticles(parPool, playerCar.position, 18, new Vector3(0, 2, 0), new Color3(1, 0, 1), 0.6);
-
-    } else if (type === "BOMB") {
-      // Stun nearest AI
-      let nearest = null, minDist = Infinity;
-      for (const c of cars) {
-        if (c === playerCar) continue;
-        const dist = Vector3.Distance(c.position, playerCar.position);
-        if (dist < minDist) { minDist = dist; nearest = c; }
+    // Countdown
+    (async () => {
+      for (let c = 3; c >= 1; c--) {
+        countdownEl.textContent = c;
+        countdownEl.style.animation = "none";
+        void countdownEl.offsetWidth;
+        countdownEl.style.animation = "countPop 0.6s ease-out";
+        playTone(440, "square", 0.2, 0.3);
+        await sleep(900);
       }
-      if (nearest && minDist < 35) {
-        nearest.userData.stunTimer = 2.2;
-        spawnParticles(parPool, nearest.position, 35, new Vector3(0, 5, 0), new Color3(1, 0.5, 0), 1.0);
-        playTone(150, "sawtooth", 0.5, 0.45);
-      }
+      countdownEl.textContent = "GO!";
+      countdownEl.style.color = "#0f0";
+      countdownEl.style.animation = "none";
+      void countdownEl.offsetWidth;
+      countdownEl.style.animation = "countPop 0.6s ease-out";
+      playTone(880, "sawtooth", 0.35, 0.4);
+      raceStarted = true;
+      await sleep(700);
+      countdownEl.classList.add("hidden");
+    })();
 
-    } else if (type === "ICE") {
-      // Ice all AIs
-      for (const c of cars) {
-        if (c === playerCar) continue;
-        c.userData.ice = true; c.userData.iceTimer = 3;
-        spawnParticles(parPool, c.position, 15, new Vector3(0, 2, 0), new Color3(0.5, 0.9, 1), 0.7);
+    // ── Render loop ──
+    let lastT = performance.now();
+    const tmpV = new Vector3();
+
+    scene.registerBeforeRender(() => {
+      const now = performance.now();
+      const dt  = Math.min((now - lastT) / 1000, 0.05);
+      lastT = now;
+
+      if (!raceStarted || raceFinished) return;
+      raceTime += dt;
+
+      // Rotate pickups
+      for (const pu of pickups) {
+        if (pu.active) {
+          pu.mesh.rotation.y += dt * 1.8;
+          const s = trackSample(track, pu.t);
+          pu.mesh.position.y = s.pos.y + CAR_H + 1.5 + Math.sin(raceTime*2.5 + pu.t*40)*0.4;
+        } else if (pu.respawn > 0) {
+          pu.respawn -= dt;
+          if (pu.respawn <= 0) {
+            pu.active = true; pu.mesh.isVisible = true;
+            pu.type = POWERUP_TYPES[Math.floor(Math.random()*POWERUP_TYPES.length)];
+            pu.mat.emissiveColor = Color3.FromHexString(POWERUP_COLS[pu.type]);
+          }
+        }
       }
 
-    } else if (type === "LIGHTNING") {
-      // Stun all AIs
-      for (const c of cars) {
-        if (c === playerCar) continue;
-        c.userData.stunTimer = 1.5;
-        spawnParticles(parPool, c.position, 15, new Vector3(0, 3, 0), new Color3(1, 1, 0), 0.5);
+      // Cars
+      for (let ci = 0; ci < carMeshes.length; ci++) {
+        const car = carMeshes[ci];
+        const d   = car.userData;
+
+        if (d.stunTimer > 0) { d.stunTimer -= dt; d.speed *= 0.92; placeOnTrack(car, track, d.t, d.lat); continue; }
+
+        const topSpd = d.powerup==="TURBO" ? MAX_SPEED*1.35 : d.powerup==="ROCKET" ? MAX_SPEED*1.6 : MAX_SPEED;
+
+        if (d.ai) {
+          d.speed = Math.min(d.speed + ACCEL*dt*(0.82+ci*0.06), topSpd*0.93);
+        } else {
+          if (keys["ArrowUp"]||keys["KeyW"])        d.speed = Math.min(d.speed + ACCEL*dt, topSpd);
+          else if (keys["ArrowDown"]||keys["KeyS"]) d.speed = Math.max(d.speed - BRAKE*dt, 4);
+          else                                       d.speed = Math.max(d.speed - 1.5*dt, BASE_SPEED);
+          d.speed = Math.min(d.speed, topSpd);
+        }
+
+        let steerIn = 0;
+        if (d.ai) {
+          if (!d.aiNextLane || raceTime > d.aiNextLane) {
+            d.aiTargetLat = (Math.random()-0.5)*0.9;
+            d.aiNextLane  = raceTime + 1.5 + Math.random()*2;
+          }
+          steerIn = Math.max(-1, Math.min(1, (d.aiTargetLat - d.lat)*2.5));
+        } else {
+          if (keys["ArrowLeft"] ||keys["KeyA"]||touchLeft)  steerIn -= 1;
+          if (keys["ArrowRight"]||keys["KeyD"]||touchRight) steerIn += 1;
+          if (Math.abs(gyroY) > 0.08) steerIn += gyroY;
+          steerIn = Math.max(-1, Math.min(1, steerIn));
+          // Powerup
+          if ((keys["Space"]||keys["KeyE"]||touchUse) && !usePuFlag) {
+            usePuFlag = true;
+            activatePowerup(d, carMeshes, parPool, player, track);
+          }
+          if (!keys["Space"]&&!keys["KeyE"]&&!touchUse) usePuFlag = false;
+        }
+        if (d.ice) steerIn *= 0.3;
+
+        d.steer += (steerIn - d.steer) * (1 - Math.pow(STEER_DAMP, dt*60));
+
+        const tAdv = (d.speed * dt) / (track.points.length * 2.2);
+        d.t   += tAdv;
+        d.lat += d.steer * STEER_RATE * dt;
+        d.lat  = Math.max(-1.3, Math.min(1.3, d.lat));
+
+        if (d.t > 0.5) d.lapProgress = 1;
+        if (d.t >= 1 && d.lapProgress > 0.5) {
+          d.t -= 1; d.lap++; d.lapProgress = 0;
+          if (!d.ai) {
+            lapNum.textContent = Math.min(d.lap+1, LAPS);
+            playTone(660, "square", 0.25, 0.35);
+            spawnPar(parPool, car.position, 20, new Vector3(0,3,0), new Color3(0,1,1), 0.7);
+          }
+          if (d.lap >= LAPS) {
+            finishCount++;
+            if (d.isPlayer) { raceFinished = true; showEnd(finishCount, raceTime); }
+            d.speed = BASE_SPEED * 0.5;
+          }
+        }
+
+        // Fall
+        if (Math.abs(d.lat) > FALL_LAT) {
+          d.fallTimer += dt;
+          if (d.fallTimer > 0.3) {
+            spawnPar(parPool, car.position, 25, new Vector3(0,2,0), new Color3(1,0.3,0), 0.9);
+            d.lat = 0; d.t = ((d.t%1)+1)%1 - 0.02;
+            d.speed = BASE_SPEED * 0.65; d.fallTimer = 0;
+            if (!d.ai) playTone(200, "sawtooth", 0.5, 0.3);
+          }
+        } else { d.fallTimer = 0; }
+
+        placeOnTrack(car, track, d.t, d.lat);
+
+        // Powerup tick
+        if (d.powerup && d.powerupTimer > 0) {
+          d.powerupTimer -= dt;
+          if (d.powerupTimer <= 0) { d.powerup=null; d.shield=false; d.ice=false; if(!d.ai) updatePuHUD(null); }
+        }
+        if (d.ice) { d.iceTimer -= dt; if (d.iceTimer<=0) d.ice=false; }
+
+        // Pickups
+        for (const pu of pickups) {
+          if (!pu.active) continue;
+          const s   = trackSample(track, pu.t);
+          const pup = s.pos.add(new Vector3(0, CAR_H+1.5, 0));
+          if (Vector3.Distance(car.position, pup) < 4.5) {
+            pu.active = false; pu.mesh.isVisible = false; pu.respawn = 8 + Math.random()*5;
+            if (!d.ai) { d.powerup = pu.type; d.powerupTimer = 12; updatePuHUD(pu.type); playTone(550,"square",0.2,0.3); }
+            else { applyAIPickup(pu.type, d, carMeshes, parPool, player); }
+          }
+        }
       }
-      playTone(1000, "sawtooth", 0.4, 0.4);
+
+      // AI ramming
+      for (let i=1; i<carMeshes.length; i++) {
+        const dist = Vector3.Distance(carMeshes[i].position, player.position);
+        if (dist < 5.5 && !player.userData.shield) {
+          const push = player.position.subtract(carMeshes[i].position).normalize();
+          player.userData.lat   += push.x * 0.22;
+          player.userData.speed *= 0.9;
+        }
+      }
+
+      // HUD
+      const sorted = [...carMeshes].sort((a,b)=>{
+        const at = a.userData.lap + ((a.userData.t%1+1)%1);
+        const bt = b.userData.lap + ((b.userData.t%1+1)%1);
+        return bt - at;
+      });
+      const pos = sorted.indexOf(player) + 1;
+      posNum.textContent = pos; posSuf.textContent = suffix(pos);
+      lapNum.textContent = Math.min(player.userData.lap+1, LAPS);
+      speedNum.textContent = Math.round(player.userData.speed * 3.6 * 0.5);
+
+      if (engOsc) {
+        const freq = 60 + (player.userData.speed / MAX_SPEED) * 210;
+        try { engOsc.frequency.setTargetAtTime(freq, getAudio().currentTime, 0.1); } catch {}
+      }
+
+      // Camera
+      const s    = trackSample(track, ((player.userData.t%1+1)%1));
+      const flat = new Vector3(s.tan.x, s.tan.y*0.18, s.tan.z).normalize();
+      const idealPos  = player.position.subtract(flat.scale(14)).add(new Vector3(0,6,0));
+      const idealLook = player.position.add(flat.scale(12));
+      const a = Math.min(dt*9, 1);
+      Vector3.LerpToRef(camPos, idealPos,  a, camPos);
+      Vector3.LerpToRef(camLook, idealLook, Math.min(dt*11,1), camLook);
+      camera.position.copyFrom(camPos);
+      camera.setTarget(camLook);
+      camera.upVector.set(0,1,0);
+
+      // Particles
+      tickPar(parPool, dt);
+
+      // Exhaust
+      if (Math.random() < 0.3) {
+        const ex  = player.position.add(new Vector3(0,-0.2,-2.6));
+        const spd = player.userData.speed;
+        spawnPar(parPool, ex, 1,
+          new Vector3((Math.random()-0.5)*2, 1, -spd*0.03),
+          spd > BASE_SPEED*1.5 ? new Color3(0,0.7,1) : new Color3(0.5,0.5,0.5),
+          0.28);
+      }
+
+      drawMinimap(carMeshes);
+    });
+
+    engine.runRenderLoop(() => scene.render());
+    window.addEventListener("resize", () => engine.resize());
+
+    // ─────────────────────────────────────
+    function activatePowerup(d, cars, pool, playerCar, track) {
+      if (!d.powerup) return;
+      const type = d.powerup;
+      playTone(770, "square", 0.25, 0.4);
+
+      if (type==="TURBO")  { d.speed = Math.min(d.speed+28, MAX_SPEED*1.35); spawnPar(pool, playerCar.position, 20, new Vector3(0,2,0), new Color3(0,1,1), 0.6); }
+      if (type==="ROCKET") { d.speed = MAX_SPEED*1.6; d.powerupTimer = 4; spawnPar(pool, playerCar.position, 30, new Vector3(0,3,0), new Color3(1,0.4,0), 0.8); }
+      if (type==="SHIELD") { d.shield = true; d.powerupTimer = 8; spawnPar(pool, playerCar.position, 15, new Vector3(0,2,0), new Color3(0,0.6,1), 0.6); }
+      if (type==="MAGNET") { d.t += 0.025; d.speed = Math.min(d.speed+18, MAX_SPEED); spawnPar(pool, playerCar.position, 18, new Vector3(0,2,0), new Color3(1,0,1), 0.6); }
+      if (type==="BOMB") {
+        let nearest=null, best=Infinity;
+        for (const c of cars) { if (c===playerCar) continue; const dist=Vector3.Distance(c.position, playerCar.position); if (dist<best){best=dist;nearest=c;} }
+        if (nearest && best<40) { nearest.userData.stunTimer=2.2; spawnPar(pool, nearest.position, 35, new Vector3(0,5,0), new Color3(1,0.5,0), 1); playTone(150,"sawtooth",0.5,0.45); }
+      }
+      if (type==="ICE")       { for (const c of cars) { if (c===playerCar) continue; c.userData.ice=true; c.userData.iceTimer=3; spawnPar(pool, c.position, 15, new Vector3(0,2,0), new Color3(0.5,0.9,1), 0.7); } }
+      if (type==="LIGHTNING") { for (const c of cars) { if (c===playerCar) continue; c.userData.stunTimer=1.5; spawnPar(pool, c.position, 15, new Vector3(0,3,0), new Color3(1,1,0), 0.5); } playTone(1000,"sawtooth",0.35,0.4); }
+
+      d.powerup=null; d.powerupTimer=0; updatePuHUD(null);
     }
 
-    d.powerup      = null;
-    d.powerupTimer = 0;
-    updatePowerupHUD(null);
+    function applyAIPickup(type, d, cars, pool, playerCar) {
+      const dist = Vector3.Distance(d.isPlayer ? Vector3.Zero() : playerCar.position, playerCar.position);
+      if (type==="BOMB"||type==="ICE"||type==="LIGHTNING") {
+        if (Vector3.Distance(playerCar.position, playerCar.position) < 35 || true) {
+          if (type==="BOMB")      { playerCar.userData.stunTimer=1.8; spawnPar(pool, playerCar.position, 30, new Vector3(0,5,0), new Color3(1,0.5,0),1); }
+          if (type==="ICE")       { playerCar.userData.ice=true; playerCar.userData.iceTimer=3; }
+          if (type==="LIGHTNING") { playerCar.userData.stunTimer=1.2; }
+        }
+      }
+    }
+
+    function showEnd(pos, time) {
+      endEl.classList.remove("hidden");
+      const m=Math.floor(time/60), s2=Math.floor(time%60), ms=Math.floor((time%1)*100);
+      document.getElementById("end-position").textContent = pos===1?"1ST PLACE — WINNER!": pos+suffix(pos)+" PLACE";
+      document.getElementById("end-time").textContent = `TIME: ${m}:${String(s2).padStart(2,"0")}.${String(ms).padStart(2,"0")}`;
+      playTone(880,"square",0.1,0.4);
+      setTimeout(()=>playTone(1100,"square",0.1,0.4),150);
+      setTimeout(()=>playTone(1320,"square",0.3,0.4),300);
+    }
+
+    document.getElementById("restartBtn").addEventListener("click", () => window.location.reload());
+
+  } catch (err) {
+    console.error("WILD RIDE ERROR:", err);
+    document.getElementById("loadingText").textContent = "ERROR: " + err.message;
+    document.getElementById("loadingText").style.color = "#f44";
   }
-
-  // ── Powerup HUD ──
-  function updatePowerupHUD(type) {
-    if (!type) { puDisplay.classList.add("hidden"); return; }
-    puDisplay.classList.remove("hidden");
-    puIcon.textContent = POWERUP_ICONS[type] || "?";
-    puName.textContent = type;
-  }
-
-  // ── End screen ──
-  function showEndScreen(pos, time) {
-    endEl.classList.remove("hidden");
-    const m = Math.floor(time / 60), s = Math.floor(time % 60), ms = Math.floor((time % 1) * 100);
-    document.getElementById("end-position").textContent =
-      pos === 1 ? "1ST PLACE — WINNER!" : pos + suffix(pos) + " PLACE";
-    document.getElementById("end-time").textContent =
-      `TIME: ${m}:${String(s).padStart(2,"0")}.${String(ms).padStart(2,"0")}`;
-    playTone(880, "square", 0.1, 0.4);
-    setTimeout(() => playTone(1100, "square", 0.1, 0.4), 150);
-    setTimeout(() => playTone(1320, "square", 0.3, 0.4), 300);
-  }
-
-  document.getElementById("restartBtn").addEventListener("click", () => {
-    window.location.reload();
-  });
-
-  // ── Start render loop ──
-  engine.runRenderLoop(() => scene.render());
-  window.addEventListener("resize", () => engine.resize());
 }
 
-// ═══════════════════════════════════════════════════
-//  HELPERS
-// ═══════════════════════════════════════════════════
-function nextFrame() {
-  return new Promise(r => requestAnimationFrame(r));
-}
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
-main().catch(console.error);
+main();
